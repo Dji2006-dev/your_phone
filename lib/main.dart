@@ -2,12 +2,11 @@ import 'package:flutter/material.dart';
 import 'dart:math';
 import 'dart:isolate';
 
-void isolatePrimeTask(SendPort sendPort) {
+int isolatePrimeTask(int endNum) {
   int primeCount = 0;
   bool isPrime;
   double sqrtN;
   int startNum = 2;
-  int endNum = 100000;
 
   for (int n = startNum; n <= endNum; n++) {
     isPrime = true;
@@ -22,7 +21,36 @@ void isolatePrimeTask(SendPort sendPort) {
       primeCount++;
     }
   }
-  sendPort.send(primeCount);
+  return primeCount;
+}
+
+int isolateCalcTask(int perTypeCount, int calcMin, int calcMax) {
+  Random random = Random();
+  double sum = 0;
+
+  for (int i = 0; i < perTypeCount; i++) {
+    int a = random.nextInt(calcMax - calcMin) + calcMin;
+    int b = random.nextInt(calcMax - calcMin) + calcMin;
+    sum += a + b;
+  }
+  for (int i = 0; i < perTypeCount; i++) {
+    int a = random.nextInt(calcMax - calcMin) + calcMin;
+    int b = random.nextInt(calcMax - calcMin) + calcMin;
+    sum += a - b;
+  }
+  for (int i = 0; i < perTypeCount; i++) {
+    int a = random.nextInt(calcMax - calcMin) + calcMin;
+    int b = random.nextInt(calcMax - calcMin) + calcMin;
+    sum += a * b;
+  }
+  for (int i = 0; i < perTypeCount; i++) {
+    int a = random.nextInt(calcMax - calcMin) + calcMin;
+    int b = random.nextInt(calcMax - calcMin) + calcMin;
+    if (b != 0) {
+      sum += a / b;
+    }
+  }
+  return sum.toInt();
 }
 
 void main() {
@@ -46,14 +74,13 @@ class BenchPage extends StatefulWidget {
 }
 
 class _BenchPageState extends State<BenchPage> {
-  // ✅ 把你那一堆变量、常量，粘贴到这个大括号里面！
-  // 这里就是放 isRunning、logText、所有final常量的地方
   bool isRunning = false;
   String logText = "就绪";
   double scorePrime = 0.0;
   double scoreCalc = 0.0;
   double scoreMulti = 0.0;
   double totalScore = 0.0;
+
   final int primeStart = 2;
   final int primeEnd = 100000;
   final int calcMin = 10000;
@@ -62,79 +89,41 @@ class _BenchPageState extends State<BenchPage> {
   final int basePrimeMs = 3000;
   final int baseCalcMs = 500;
   final int baseMultiMs = 3000;
+
   Future<double> runPrimeTest() async {
-    final Stopwatch start = Stopwatch()..start();
-    int primeCount = 0;
-    bool isPrime;
-    double sqrtN;
-
-    for (int n = primeStart; n <= primeEnd; n++) {
-      isPrime = true;
-      sqrtN = sqrt(n);
-      for (int j = 2; j <= sqrtN; j++) {
-        if (n % j == 0) {
-          isPrime = false;
-          break;
-        }
-      }
-      if (isPrime) {
-        primeCount++;
-      }
-    }
-
-    final int usedMs = start.elapsed.inMilliseconds;
-    double score = basePrimeMs * 1000 / usedMs;
+    final Stopwatch sw = Stopwatch()..start();
+    // 全部计算放到Isolate，并且接收返回值，编译器无法删除
+    int primeCount = await Isolate.run(() => isolatePrimeTask(primeEnd));
+    sw.stop();
+    final double usedMs = sw.elapsedMicroseconds / 1000.0;
+    final double safeMs = max(usedMs, 0.001);
+    double score = basePrimeMs * 1000 / safeMs;
+    print("质数数量：$primeCount");
     return score;
   }
 
   Future<double> runCalcTest() async {
-    final DateTime start = DateTime.now();
-    Random random = Random();
-    double sum = 0;
-
-    // 加法
-    for (int i = 0; i < perTypeCount; i++) {
-      int a = random.nextInt(calcMax - calcMin) + calcMin;
-      int b = random.nextInt(calcMax - calcMin) + calcMin;
-      sum += a + b;
-    }
-    // 减法
-    for (int i = 0; i < perTypeCount; i++) {
-      int a = random.nextInt(calcMax - calcMin) + calcMin;
-      int b = random.nextInt(calcMax - calcMin) + calcMin;
-      sum += a - b;
-    }
-    // 乘法
-    for (int i = 0; i < perTypeCount; i++) {
-      int a = random.nextInt(calcMax - calcMin) + calcMin;
-      int b = random.nextInt(calcMax - calcMin) + calcMin;
-      sum += a * b;
-    }
-    // 除法（防止除0）
-    for (int i = 0; i < perTypeCount; i++) {
-      int a = random.nextInt(calcMax - calcMin) + calcMin;
-      int b = random.nextInt(calcMax - calcMin) + calcMin;
-      if (b != 0) {
-        sum += a / b;
-      }
-    }
-
-    final int usedMs = DateTime.now().difference(start).inMilliseconds;
-    double score = baseCalcMs * 1000 / usedMs;
+    final Stopwatch sw = Stopwatch()..start();
+    int sumResult = await Isolate.run(
+      () => isolateCalcTask(perTypeCount, calcMin, calcMax),
+    );
+    sw.stop();
+    final double usedMs = sw.elapsedMicroseconds / 1000.0;
+    final double safeMs = max(usedMs, 0.001);
+    double score = baseCalcMs * 1000 / safeMs;
+    print("计算总和：$sumResult");
     return score;
   }
 
   Future<double> runMultiTest() async {
-    final DateTime start = DateTime.now();
-
-    final ReceivePort receivePort = ReceivePort();
-    await Isolate.spawn(isolatePrimeTask, receivePort.sendPort);
-
-    await receivePort.first;
-    receivePort.close();
-
-    final int usedMs = DateTime.now().difference(start).inMilliseconds;
-    double score = baseMultiMs * 1000 / usedMs;
+    final Stopwatch sw = Stopwatch()..start();
+    // 多隔离测试，新开isolate跑质数
+    int primeCount = await Isolate.run(() => isolatePrimeTask(primeEnd));
+    sw.stop();
+    final double usedMs = sw.elapsedMicroseconds / 1000.0;
+    final double safeMs = max(usedMs, 0.001);
+    double score = baseMultiMs * 1000 / safeMs;
+    print("多隔离质数数量：$primeCount");
     return score;
   }
 
