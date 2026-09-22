@@ -1,0 +1,3 @@
+这是一个简易的跑分软件，测CPU的，测试过程就是算2到10万之间的质数，然后算2000道+-*/计算，然后CPU多核，多任务，最后通过时间等评分。
+This is a simple benchmark software for testing CPU performance.
+The test process involves calculating prime numbers from 2 to 100,000, performing 2000 arithmetic operations of addition, subtraction, multiplication and division, and testing multi-core and multi-task capabilities of the CPU. Finally, scores are calculated based on the elapsed time.
