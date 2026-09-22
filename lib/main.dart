@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
-import 'dart:math';
 import 'dart:isolate';
 import 'dart:async';
+import 'dart:math';
 
-int isolatePrimeTask(int endNum) {
+void isolatePrimeEntry(SendPort sendPort) {
   int primeCount = 0;
   bool isPrime;
   double sqrtN;
   int startNum = 2;
+  int endNum = 100000;
 
   for (int n = startNum; n <= endNum; n++) {
     isPrime = true;
@@ -22,7 +23,7 @@ int isolatePrimeTask(int endNum) {
       primeCount++;
     }
   }
-  return primeCount;
+  sendPort.send(primeCount);
 }
 
 int isolateCalcTask(int perTypeCount, int calcMin, int calcMax) {
@@ -54,28 +55,70 @@ int isolateCalcTask(int perTypeCount, int calcMin, int calcMax) {
   return sum.toInt();
 }
 
-Future<double> runMultiCoreTest({
-  required int coreCount,
-  required int primeEnd,
-}) async {
+Future<double> runPrimeTest() async {
+  final Stopwatch sw = Stopwatch()..start();
+  final receivePort = ReceivePort();
+  final isolate = await Isolate.spawn(isolatePrimeEntry, receivePort.sendPort);
+  try {
+    final result =
+        await receivePort.first.timeout(const Duration(seconds: 40)) as int;
+    sw.stop();
+    final double usedMs = sw.elapsedMicroseconds / 1000.0;
+    final double safeMs = max(usedMs, 0.001);
+    double score = 3000 * 1000 / safeMs;
+    print("质数数量：$result");
+    return score;
+  } on TimeoutException {
+    sw.stop();
+    print("质数测试超时！");
+    return 0;
+  } finally {
+    receivePort.close();
+    isolate.kill();
+  }
+}
+
+Future<double> runCalcTest() async {
   final Stopwatch sw = Stopwatch()..start();
   try {
-    List<Future<int>> taskList = [];
-    for (int i = 0; i < coreCount; i++) {
-      taskList.add(Isolate.run(() => isolatePrimeTask(primeEnd)));
-    }
-    List<int> res = await Future.wait(
-      taskList,
-    ).timeout(const Duration(seconds: 40));
+    int sumResult = await Isolate.run(
+      () => isolateCalcTask(500, 10000, 50000),
+    ).timeout(const Duration(seconds: 20));
+    sw.stop();
+    final double usedMs = sw.elapsedMicroseconds / 1000.0;
+    final double safeMs = max(usedMs, 0.001);
+    double score = 500 * 1000 / safeMs;
+    print("计算总和：$sumResult");
+    return score;
+  } on TimeoutException {
+    sw.stop();
+    print("四则测试超时！");
+    return 0;
+  }
+}
+
+Future<double> runMultiCoreTest({required int coreCount}) async {
+  final Stopwatch sw = Stopwatch()..start();
+  List<Future<int>> tasks = [];
+  for (int i = 0; i < coreCount; i++) {
+    final receivePort = ReceivePort();
+    // 强制类型转换，修复编译报错
+    Future<int> task = receivePort.first
+        .timeout(const Duration(seconds: 40))
+        .then((value) => value as int);
+    tasks.add(task);
+    await Isolate.spawn(isolatePrimeEntry, receivePort.sendPort);
+  }
+  try {
+    final res = await Future.wait(tasks);
     sw.stop();
     final double usedMs = sw.elapsedMicroseconds / 1000.0;
     final double safeMs = max(usedMs, 0.001);
     double score = (coreCount * 3000) / safeMs * 1000;
-    print("多核任务结果：$res");
+    print("多核结果：$res");
     return score;
   } on TimeoutException {
     sw.stop();
-    print("多核测试超时！");
     return 0;
   }
 }
@@ -89,7 +132,10 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(home: const BenchPage());
+    return MaterialApp(
+      home: const BenchPage(),
+      debugShowCheckedModeBanner: false,
+    );
   }
 }
 
@@ -103,140 +149,72 @@ class BenchPage extends StatefulWidget {
 class _BenchPageState extends State<BenchPage> {
   bool isRunning = false;
   String logText = "就绪";
+  String logTextEn = "Ready";
   double scorePrime = 0.0;
   double scoreCalc = 0.0;
-  double scoreMulti = 0.0;
   double totalScore = 0.0;
-  double multiCoreScore = 0.0;
+  double multiScore = 0;
 
-  final int primeStart = 2;
-  final int primeEnd = 100000;
-  final int calcMin = 10000;
-  final int calcMax = 50000;
-  final int perTypeCount = 500;
-  final int basePrimeMs = 3000;
-  final int baseCalcMs = 500;
-  final int baseMultiMs = 3000;
-
-  Future<double> runPrimeTest() async {
-    final Stopwatch sw = Stopwatch()..start();
-    try {
-      int primeCount = await Isolate.run(
-        () => isolatePrimeTask(primeEnd),
-      ).timeout(const Duration(seconds: 40));
-      sw.stop();
-      final double usedMs = sw.elapsedMicroseconds / 1000.0;
-      final double safeMs = max(usedMs, 0.001);
-      double score = basePrimeMs * 1000 / safeMs;
-      print("质数数量：$primeCount");
-      return score;
-    } on TimeoutException {
-      sw.stop();
-      print("阶段1质数测试超时卡死！");
-      return 0;
-    }
-  }
-
-  Future<double> runCalcTest() async {
-    final Stopwatch sw = Stopwatch()..start();
-    try {
-      int sumResult = await Isolate.run(
-        () => isolateCalcTask(perTypeCount, calcMin, calcMax),
-      ).timeout(const Duration(seconds: 20));
-      sw.stop();
-      final double usedMs = sw.elapsedMicroseconds / 1000.0;
-      final double safeMs = max(usedMs, 0.001);
-      double score = baseCalcMs * 1000 / safeMs;
-      print("计算总和：$sumResult");
-      return score;
-    } on TimeoutException {
-      sw.stop();
-      print("阶段2四则运算超时！");
-      return 0;
-    }
-  }
-
-  Future<double> runMultiTest() async {
-    final Stopwatch sw = Stopwatch()..start();
-    try {
-      int primeCount = await Isolate.run(
-        () => isolatePrimeTask(primeEnd),
-      ).timeout(const Duration(seconds: 40));
-      sw.stop();
-      final double usedMs = sw.elapsedMicroseconds / 1000.0;
-      final double safeMs = max(usedMs, 0.001);
-      double score = baseMultiMs * 1000 / safeMs;
-      print("多隔离质数数量：$primeCount");
-      return score;
-    } on TimeoutException {
-      sw.stop();
-      print("阶段3隔离测试超时！");
-      return 0;
-    }
-  }
-
-  Future<void> runAllSingleCore() async {
+  Future<void> runSingleCoreAll() async {
     if (isRunning) return;
     setState(() {
       isRunning = true;
       logText = "开始单核跑分...";
+      logTextEn = "Starting single-core benchmark...";
     });
 
     scorePrime = await runPrimeTest();
     if (scorePrime <= 0) {
       setState(() {
-        logText = "阶段1超时失败！";
+        logText = "阶段1超时失败";
+        logTextEn = "Stage 1 timed out";
         isRunning = false;
       });
       return;
     }
     setState(() {
-      logText = "阶段1完成，质数分数：${scorePrime.toStringAsFixed(2)}";
+      logText = "阶段1质数完成";
+      logTextEn = "Stage 1 Primes completed: ${scorePrime.toStringAsFixed(2)}";
     });
 
     scoreCalc = await runCalcTest();
     if (scoreCalc <= 0) {
       setState(() {
-        logText = "阶段2超时失败！";
+        logText = "阶段2超时失败";
+        logTextEn = "Stage 2 timed out";
         isRunning = false;
       });
       return;
     }
     setState(() {
-      logText = "阶段2完成，四则分数：${scoreCalc.toStringAsFixed(2)}";
+      logText = "阶段2四则完成";
+      logTextEn = "Stage 2 Math completed: ${scoreCalc.toStringAsFixed(2)}";
     });
 
-    scoreMulti = await runMultiTest();
-    if (scoreMulti <= 0) {
-      setState(() {
-        logText = "阶段3超时失败！";
-        isRunning = false;
-      });
-      return;
-    }
+    totalScore = (scorePrime + scoreCalc) / 2;
     setState(() {
-      logText = "阶段3完成，隔离分数：${scoreMulti.toStringAsFixed(2)}";
-    });
-
-    totalScore = (scorePrime + scoreCalc + scoreMulti) / 3;
-    setState(() {
-      logText = "✅单核总分：${totalScore.toStringAsFixed(2)}";
+      logText = "✅ 单核总分";
+      logTextEn = "✅ Single-core total score: ${totalScore.toStringAsFixed(2)}";
       isRunning = false;
     });
   }
 
-  Future<void> runAllMultiCore() async {
+  Future<void> runMultiCore() async {
     if (isRunning) return;
     setState(() {
       isRunning = true;
-      logText = "开始多核跑分（4线程）";
+      logText = "多核4线程开始";
+      logTextEn = "Starting multi-core 4-thread benchmark";
     });
-    multiCoreScore = await runMultiCoreTest(coreCount: 4, primeEnd: primeEnd);
+
+    multiScore = await runMultiCoreTest(coreCount: 4);
     setState(() {
-      if (multiCoreScore <= 0) {
-        logText = "多核测试超时失败！";
+      if (multiScore <= 0) {
+        logText = "多核超时失败";
+        logTextEn = "Multi-core benchmark timed out";
       } else {
-        logText = "✅多核跑分分数：${multiCoreScore.toStringAsFixed(2)}";
+        logText = "✅ 多核分数";
+        logTextEn = "✅ Multi-core score: ${multiScore.toStringAsFixed(2)}";
       }
       isRunning = false;
     });
@@ -245,23 +223,68 @@ class _BenchPageState extends State<BenchPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Dart Benchmark")),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+      appBar: AppBar(
+        title: const Column(
           children: [
-            Text(logText, style: const TextStyle(fontSize: 18)),
-            const SizedBox(height: 30),
-            ElevatedButton(
-              onPressed: isRunning ? null : runAllSingleCore,
-              child: const Text("开始单核跑分"),
-            ),
-            const SizedBox(height: 10),
-            ElevatedButton(
-              onPressed: isRunning ? null : runAllMultiCore,
-              child: const Text("开始多核跑分（4核）"),
-            ),
+            Text("Dart 跑分测试"),
+            Text("Dart Benchmark", style: TextStyle(fontSize: 12)),
           ],
+        ),
+      ),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                logText,
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                logTextEn,
+                style: const TextStyle(fontSize: 14, color: Colors.black54),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 40),
+              SizedBox(
+                width: 240,
+                child: ElevatedButton(
+                  onPressed: isRunning ? null : runSingleCoreAll,
+                  child: const Column(
+                    children: [
+                      Text("开始单核跑分"),
+                      Text(
+                        "Start Single-Core Benchmark",
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: 240,
+                child: ElevatedButton(
+                  onPressed: isRunning ? null : runMultiCore,
+                  child: const Column(
+                    children: [
+                      Text("开始多核跑分（4核）"),
+                      Text(
+                        "Start Multi-Core Benchmark (4 Cores)",
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
