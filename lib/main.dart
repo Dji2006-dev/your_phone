@@ -63,7 +63,7 @@ class _BenchPageState extends State<BenchPage> {
   final int baseCalcMs = 500;
   final int baseMultiMs = 3000;
   Future<double> runPrimeTest() async {
-    final DateTime start = DateTime.now();
+    final Stopwatch start = Stopwatch()..start();
     int primeCount = 0;
     bool isPrime;
     double sqrtN;
@@ -82,7 +82,7 @@ class _BenchPageState extends State<BenchPage> {
       }
     }
 
-    final int usedMs = DateTime.now().difference(start).inMilliseconds;
+    final int usedMs = start.elapsed.inMilliseconds;
     double score = basePrimeMs * 1000 / usedMs;
     return score;
   }
